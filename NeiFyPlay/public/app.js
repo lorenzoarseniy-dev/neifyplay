@@ -1,3 +1,4 @@
+
 const $ = (selector) => document.querySelector(selector);
 
 let csrfToken = "";
@@ -7,7 +8,11 @@ let toastTimer;
 
 function escapeHtml(value = "") {
   return String(value).replace(/[&<>"']/g, (char) => ({
-    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#39;"
   })[char]);
 }
 
@@ -21,50 +26,153 @@ function showToast(message) {
 
 async function api(url, options = {}) {
   const headers = new Headers(options.headers || {});
+
   if (csrfToken && options.method && options.method !== "GET") {
     headers.set("X-CSRF-Token", csrfToken);
   }
-  const response = await fetch(url, { ...options, headers, credentials: "same-origin" });
+
+  const response = await fetch(url, {
+    ...options,
+    headers,
+    credentials: "same-origin"
+  });
+
   const contentType = response.headers.get("content-type") || "";
-  const data = contentType.includes("application/json") ? await response.json() : null;
-  if (!response.ok) throw new Error(data?.error || "Произошла ошибка. Попробуйте ещё раз.");
+  const data = contentType.includes("application/json")
+    ? await response.json()
+    : null;
+
+  if (!response.ok) {
+    throw new Error(data?.error || "Произошла ошибка. Попробуйте ещё раз.");
+  }
+
   return data;
+}
+
+// Загрузка видео с отображением прогресса
+function uploadWithProgress(url, formData, onProgress) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+
+    xhr.open("POST", url);
+    xhr.withCredentials = true;
+
+    if (csrfToken) {
+      xhr.setRequestHeader("X-CSRF-Token", csrfToken);
+    }
+
+    xhr.upload.addEventListener("progress", (event) => {
+      if (!event.lengthComputable) return;
+
+      const percent = Math.round(
+        (event.loaded / event.total) * 100
+      );
+
+      const loaded = (event.loaded / 1024 / 1024).toFixed(1);
+      const total = (event.total / 1024 / 1024).toFixed(1);
+
+      onProgress(percent, loaded, total);
+    });
+
+    xhr.upload.addEventListener("load", () => {
+      onProgress(100, "", "");
+    });
+
+    xhr.onload = () => {
+      let data;
+
+      try {
+        data = JSON.parse(xhr.responseText);
+      } catch {
+        data = null;
+      }
+
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve(data);
+      } else {
+        reject(new Error(
+          data?.error || `Ошибка сервера: HTTP ${xhr.status}`
+        ));
+      }
+    };
+
+    xhr.onerror = () => {
+      reject(new Error("Ошибка соединения с сервером."));
+    };
+
+    xhr.onabort = () => {
+      reject(new Error("Загрузка отменена."));
+    };
+
+    xhr.ontimeout = () => {
+      reject(new Error("Время ожидания загрузки истекло."));
+    };
+
+    xhr.timeout = 30 * 60 * 1000;
+    xhr.send(formData);
+  });
 }
 
 async function loadSession() {
   const session = await api("/api/session");
+
   csrfToken = session.csrfToken;
   authenticated = session.authenticated;
+
   updateAdminUI();
 }
 
 function updateAdminUI() {
-  $("#admin-button").textContent = authenticated ? "Панель управления" : "Войти";
+  $("#admin-button").textContent = authenticated
+    ? "Панель управления"
+    : "Войти";
+
   $("#admin-status").classList.toggle("hidden", !authenticated);
   $("#admin-panel").classList.toggle("hidden", !authenticated);
+
   if (authenticated) {
     loadAdminEpisodes().catch((error) => showToast(error.message));
   }
 }
 
 function renderEpisodes() {
-  $("#episode-total").textContent = `${episodes.length} ${episodes.length === 1 ? "СЕРИЯ" : "СЕРИИ"}`;
+  $("#episode-total").textContent =
+    `${episodes.length} ${episodes.length === 1 ? "СЕРИЯ" : "СЕРИИ"}`;
+
   const grid = $("#episodes-grid");
+
   if (!episodes.length) {
-    grid.innerHTML = '<div class="loading-card">Пока нет серий. Администратор может добавить их в панели управления.</div>';
+    grid.innerHTML =
+      '<div class="loading-card">Пока нет серий. Администратор может добавить их в панели управления.</div>';
     return;
   }
 
   grid.innerHTML = episodes.map((episode, index) => `
     <article class="episode-card">
       <div class="episode-top">
-        <span class="episode-index">ЭПИЗОД ${String(index + 1).padStart(2, "0")}</span>
-        <span class="episode-state">${episode.videoAvailable ? "ДОСТУПНО" : "СКОРО"}</span>
+        <span class="episode-index">
+          ЭПИЗОД ${String(index + 1).padStart(2, "0")}
+        </span>
+        <span class="episode-state">
+          ${episode.videoAvailable ? "ДОСТУПНО" : "СКОРО"}
+        </span>
       </div>
+
       <h3>${escapeHtml(episode.title)}</h3>
-      <p>${escapeHtml(episode.description || "Серия сериала «Бессмертный».")}</p>
-      <button class="episode-watch" type="button" data-watch-id="${episode.id}" ${episode.videoAvailable ? "" : "disabled"}>
-        ${episode.videoAvailable ? "▶ Смотреть серию" : "Видео скоро появится"}
+
+      <p>
+        ${escapeHtml(episode.description || "Серия сериала «Бессмертный».")}
+      </p>
+
+      <button
+        class="episode-watch"
+        type="button"
+        data-watch-id="${episode.id}"
+        ${episode.videoAvailable ? "" : "disabled"}
+      >
+        ${episode.videoAvailable
+          ? "▶ Смотреть серию"
+          : "Видео скоро появится"}
       </button>
     </article>
   `).join("");
@@ -72,15 +180,21 @@ function renderEpisodes() {
 
 async function loadEpisodes() {
   episodes = await api("/api/episodes");
+
   renderEpisodes();
-  if (authenticated) await loadAdminEpisodes();
+
+  if (authenticated) {
+    await loadAdminEpisodes();
+  }
 }
 
 function openLogin() {
   $("#login-message").textContent = "";
   $("#login-message").classList.remove("error");
   $("#login-form").reset();
+
   $("#login-modal").classList.remove("hidden");
+
   setTimeout(() => $("#login-username").focus(), 50);
 }
 
@@ -90,165 +204,309 @@ function closeLogin() {
 
 function openPlayer(episode) {
   $("#player-title").textContent = episode.title;
-  $("#player-description").textContent = episode.description || "";
-  $("#player-episode-label").textContent = `БЕССМЕРТНЫЙ · ${episode.title.toUpperCase()}`;
+
+  $("#player-description").textContent =
+    episode.description || "";
+
+  $("#player-episode-label").textContent =
+    `БЕССМЕРТНЫЙ · ${episode.title.toUpperCase()}`;
+
   const player = $("#video-player");
+
   player.src = episode.videoUrl;
+
   $("#player-modal").classList.remove("hidden");
+
   player.play().catch(() => {});
 }
 
 function closePlayer() {
   const player = $("#video-player");
+
   player.pause();
   player.removeAttribute("src");
   player.load();
+
   $("#player-modal").classList.add("hidden");
 }
 
 async function loadAdminEpisodes() {
   const rows = await api("/api/admin/episodes");
+
   const select = $("#episode-action");
   const currentValue = select.value;
-  select.innerHTML = '<option value="">Добавить новую серию</option>' +
-    rows.map((ep) => `<option value="${ep.id}">Загрузить / заменить видео: ${escapeHtml(ep.title)}</option>`).join("");
-  if ([...select.options].some((option) => option.value === currentValue)) {
+
+  select.innerHTML =
+    '<option value="">Добавить новую серию</option>' +
+    rows.map((ep) => `
+      <option value="${ep.id}">
+        Загрузить / заменить видео: ${escapeHtml(ep.title)}
+      </option>
+    `).join("");
+
+  if ([...select.options].some(
+    (option) => option.value === currentValue
+  )) {
     select.value = currentValue;
   }
 
   $("#admin-episodes").innerHTML = rows.map((ep, index) => `
     <div class="admin-episode-row">
       <div>
-        <div class="admin-episode-name">${String(index + 1).padStart(2, "0")} · ${escapeHtml(ep.title)}</div>
-        <div class="admin-episode-state">${ep.videoAvailable ? "Видео загружено" : "Ожидает загрузки видео"}</div>
+        <div class="admin-episode-name">
+          ${String(index + 1).padStart(2, "0")} · ${escapeHtml(ep.title)}
+        </div>
+
+        <div class="admin-episode-state">
+          ${ep.videoAvailable
+            ? "Видео загружено"
+            : "Ожидает загрузки видео"}
+        </div>
       </div>
-      <button class="delete-episode" type="button" data-delete-id="${ep.id}">Удалить</button>
+
+      <button
+        class="delete-episode"
+        type="button"
+        data-delete-id="${ep.id}"
+      >
+        Удалить
+      </button>
     </div>
   `).join("");
 }
 
+// Кнопка администратора
 $("#admin-button").addEventListener("click", () => {
   if (!authenticated) {
     openLogin();
     return;
   }
-  $("#admin-panel").scrollIntoView({ behavior: "smooth", block: "start" });
+
+  $("#admin-panel").scrollIntoView({
+    behavior: "smooth",
+    block: "start"
+  });
 });
 
-document.querySelectorAll("[data-close-login]").forEach((el) => el.addEventListener("click", closeLogin));
-document.querySelectorAll("[data-close-player]").forEach((el) => el.addEventListener("click", closePlayer));
+document.querySelectorAll("[data-close-login]")
+  .forEach((el) => el.addEventListener("click", closeLogin));
 
+document.querySelectorAll("[data-close-player]")
+  .forEach((el) => el.addEventListener("click", closePlayer));
+
+// Вход администратора
 $("#login-form").addEventListener("submit", async (event) => {
   event.preventDefault();
+
   const message = $("#login-message");
+
   message.textContent = "Проверяем данные…";
   message.classList.remove("error");
+
   const form = new FormData(event.currentTarget);
 
   try {
     const result = await api("/api/login", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json"
+      },
       body: JSON.stringify({
         username: form.get("username"),
         password: form.get("password")
       })
     });
+
     csrfToken = result.csrfToken;
     authenticated = true;
+
     closeLogin();
     updateAdminUI();
+
     await loadAdminEpisodes();
+
     showToast("Вход выполнен. Панель администратора открыта.");
-    $("#admin-panel").scrollIntoView({ behavior: "smooth" });
+
+    $("#admin-panel").scrollIntoView({
+      behavior: "smooth"
+    });
+
   } catch (error) {
     message.textContent = error.message;
     message.classList.add("error");
   }
 });
 
+// Выход администратора
 $("#logout-button").addEventListener("click", async () => {
   try {
-    await api("/api/logout", { method: "POST" });
+    await api("/api/logout", {
+      method: "POST"
+    });
+
     authenticated = false;
+
     await loadSession();
+
     showToast("Вы вышли из аккаунта.");
+
   } catch (error) {
     showToast(error.message);
   }
 });
 
+// Открытие серий
 $("#episodes-grid").addEventListener("click", (event) => {
   const button = event.target.closest("[data-watch-id]");
+
   if (!button || button.disabled) return;
-  const episode = episodes.find((item) => item.id === Number(button.dataset.watchId));
-  if (episode?.videoAvailable) openPlayer(episode);
+
+  const episode = episodes.find(
+    (item) => item.id === Number(button.dataset.watchId)
+  );
+
+  if (episode?.videoAvailable) {
+    openPlayer(episode);
+  }
 });
 
+// Выбор серии для замены видео
 $("#episode-action").addEventListener("change", () => {
   const selectedId = Number($("#episode-action").value);
+
   if (!selectedId) {
     $("#episode-title").value = `Серия ${episodes.length + 1}`;
     $("#episode-description").value = "";
     return;
   }
-  const episode = episodes.find((item) => item.id === selectedId);
+
+  const episode = episodes.find(
+    (item) => item.id === selectedId
+  );
+
   if (episode) {
     $("#episode-title").value = episode.title;
-    $("#episode-description").value = episode.description || "";
+    $("#episode-description").value =
+      episode.description || "";
   }
 });
 
+// Выбор видеофайла
 $("#episode-video").addEventListener("change", () => {
   const file = $("#episode-video").files[0];
-  $("#file-label").textContent = file ? file.name : "Выбрать видео";
+
+  $("#file-label").textContent = file
+    ? file.name
+    : "Выбрать видео";
 });
 
+// Загрузка и публикация серии с прогрессом
 $("#upload-form").addEventListener("submit", async (event) => {
   event.preventDefault();
-  const button = event.currentTarget.querySelector('button[type="submit"]');
-  const message = $("#upload-message");
-  button.disabled = true;
-  button.textContent = "Загрузка…";
-  message.classList.remove("error");
-  message.textContent = "Загружаем видео на сервер. Не закрывай страницу.";
 
-  const formData = new FormData(event.currentTarget);
+  const form = event.currentTarget;
+
+  const button = form.querySelector(
+    'button[type="submit"]'
+  );
+
+  const message = $("#upload-message");
+  const file = $("#episode-video").files[0];
+
+  if (!file) {
+    message.textContent = "Сначала выбери видеофайл.";
+    message.classList.add("error");
+    return;
+  }
+
+  button.disabled = true;
+  button.textContent = "Загрузка: 0%";
+
+  message.classList.remove("error");
+  message.textContent = `Подготовка видео: ${file.name}`;
+
+  const formData = new FormData(form);
+
   try {
-    await api("/api/admin/episodes", { method: "POST", body: formData });
-    message.textContent = "Готово! Серия сохранена.";
-    event.currentTarget.reset();
-    $("#episode-title").value = `Серия ${episodes.length + 1}`;
+    await uploadWithProgress(
+      "/api/admin/episodes",
+      formData,
+      (percent, loaded, total) => {
+        if (percent < 100) {
+          button.textContent = `Загрузка: ${percent}%`;
+
+          message.textContent =
+            `Передано ${loaded} МБ из ${total} МБ (${percent}%)`;
+        } else {
+          button.textContent = "Обработка...";
+
+          message.textContent =
+            "Видео передано. Сервер сохраняет серию...";
+        }
+      }
+    );
+
+    message.textContent =
+      "Готово! Серия успешно сохранена.";
+
+    form.reset();
+
+    $("#episode-title").value =
+      `Серия ${episodes.length + 1}`;
+
     $("#file-label").textContent = "Выбрать видео";
+
     await loadEpisodes();
     await loadAdminEpisodes();
+
     showToast("Серия успешно опубликована.");
+
   } catch (error) {
     message.textContent = error.message;
     message.classList.add("error");
+
   } finally {
     button.disabled = false;
-    button.innerHTML = 'Загрузить серию <span>↗</span>';
+    button.innerHTML =
+      'Загрузить серию <span>↗</span>';
   }
 });
 
+// Удаление серий
 $("#admin-episodes").addEventListener("click", async (event) => {
   const button = event.target.closest("[data-delete-id]");
+
   if (!button) return;
-  const episode = episodes.find((item) => item.id === Number(button.dataset.deleteId));
+
+  const episode = episodes.find(
+    (item) => item.id === Number(button.dataset.deleteId)
+  );
+
   const name = episode?.title || "эту серию";
-  if (!window.confirm(`Удалить «${name}» вместе с видеофайлом?`)) return;
+
+  if (!window.confirm(
+    `Удалить «${name}» вместе с видеофайлом?`
+  )) {
+    return;
+  }
 
   try {
-    await api(`/api/admin/episodes/${button.dataset.deleteId}`, { method: "DELETE" });
+    await api(
+      `/api/admin/episodes/${button.dataset.deleteId}`,
+      { method: "DELETE" }
+    );
+
     await loadEpisodes();
     await loadAdminEpisodes();
+
     showToast("Серия удалена.");
+
   } catch (error) {
     showToast(error.message);
   }
 });
 
+// Закрытие окон клавишей Escape
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") {
     closeLogin();
@@ -256,13 +514,21 @@ document.addEventListener("keydown", (event) => {
   }
 });
 
+// Запуск сайта
 async function init() {
   try {
     await loadSession();
     await loadEpisodes();
-    $("#episode-title").value = `Серия ${episodes.length + 1}`;
+
+    $("#episode-title").value =
+      `Серия ${episodes.length + 1}`;
+
   } catch (error) {
-    $("#episodes-grid").innerHTML = `<div class="loading-card">${escapeHtml(error.message)}</div>`;
+    $("#episodes-grid").innerHTML = `
+      <div class="loading-card">
+        ${escapeHtml(error.message)}
+      </div>
+    `;
   }
 }
 
